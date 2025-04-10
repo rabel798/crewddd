@@ -18,40 +18,68 @@ def upload_folder_to_github(source_folder, github_url, username, token):
             shutil.rmtree(temp_dir, onerror=handle_remove_readonly)
         
         # Construct the authenticated URL
-        auth_url = f"https://{username}:{token}@github.com/{username}/{github_url.split('/')[-1]}"
+        repo_name = github_url.split('/')[-1]
+        auth_url = f"https://{username}:{token}@github.com/{username}/{repo_name}"
         
         print(f"Cloning repository...")
         repo = Repo.clone_from(auth_url, temp_dir)
         
-        print("Copying files...")
-        # Copy all contents from source folder to the git repo
-        for item in os.listdir(source_folder):
-            if item != '.git' and item != temp_dir:  # Skip .git folder and temp directory
-                source_item = os.path.join(source_folder, item)
-                dest_item = os.path.join(temp_dir, item)
+        # Get list of all files and directories first
+        all_items = []
+        for root, dirs, files in os.walk(source_folder):
+            # Skip .git directory
+            if '.git' in root:
+                continue
                 
-                if os.path.isdir(source_item):
-                    if os.path.exists(dest_item):
-                        shutil.rmtree(dest_item, onerror=handle_remove_readonly)
-                    shutil.copytree(source_item, dest_item)
+            # Add directories
+            for dir_name in dirs:
+                if '.git' not in dir_name:
+                    source_dir = os.path.join(root, dir_name)
+                    rel_path = os.path.relpath(source_dir, source_folder)
+                    all_items.append(('dir', rel_path))
+            
+            # Add files
+            for file_name in files:
+                source_file = os.path.join(root, file_name)
+                rel_path = os.path.relpath(source_file, source_folder)
+                all_items.append(('file', rel_path))
+
+        # Process all items
+        total_items = len(all_items)
+        for index, (item_type, rel_path) in enumerate(all_items, 1):
+            try:
+                if item_type == 'dir':
+                    dest_dir = os.path.join(temp_dir, rel_path)
+                    if not os.path.exists(dest_dir):
+                        os.makedirs(dest_dir)
+                        repo.index.add([rel_path])
+                        repo.index.commit(f"Created directory: {rel_path}")
+                        print(f"[{index}/{total_items}] Committed directory: {rel_path}")
                 else:
-                    if os.path.exists(dest_item):
-                        os.remove(dest_item)
-                    shutil.copy2(source_item, dest_item)
-        
-        # Add all files to git
-        print("Adding files to git...")
-        repo.git.add(all=True)
-        
-        # Create commit
-        print("Creating commit...")
-        repo.index.commit("Added all files and folders")
-        
-        # Push to remote
-        print("Pushing to GitHub...")
-        origin = repo.remote('origin')
-        origin.push()
-        
+                    source_file = os.path.join(source_folder, rel_path)
+                    dest_file = os.path.join(temp_dir, rel_path)
+                    
+                    # Ensure directory exists
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                    
+                    # Copy file
+                    shutil.copy2(source_file, dest_file)
+                    
+                    # Create commit for this file
+                    repo.index.add([rel_path])
+                    repo.index.commit(f"Added file: {rel_path}")
+                    print(f"[{index}/{total_items}] Committed file: {rel_path}")
+
+                # Push after each commit
+                if index == total_items:  # Only push on the last item
+                    print("\nPushing all commits to GitHub...")
+                    origin = repo.remote('origin')
+                    origin.push()
+
+            except Exception as e:
+                print(f"Error processing {rel_path}: {str(e)}")
+                continue
+
         print("\nAll files have been successfully pushed to GitHub!")
         
     except Exception as e:
